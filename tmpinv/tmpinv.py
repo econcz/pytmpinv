@@ -1,3 +1,4 @@
+import warnings
 import numpy                           as np
 from   math            import ceil
 from   typing          import Sequence
@@ -81,6 +82,7 @@ def TMPinvSolve(
     j:             int                              = 1,
     zero_diagonal: bool                             = False,
     reduced:       tuple[int, int]           | None = None,
+    symmetric:     bool                             = False,
     *args, **kwargs
 ) -> TMPinvResult:
     """
@@ -97,8 +99,8 @@ def TMPinvSolve(
         The first `m` diagonal entries correspond to row constraints,
         and the remaining `p` to column constraints.
     M : array_like of shape (k, m * p), optional
-        A model matrix with entries in {0, 1}. Each row defines a linear
-        restriction on the flattened solution matrix. The corresponding
+        A model matrix, for example, with entries in {0, 1}. Each row defines a
+        linear restriction on the flattened solution matrix. The corresponding
         right-hand side values must be provided in `b_val`. This block is
         used to encode known cell values.
     b_row : array_like of shape (m,)
@@ -119,6 +121,12 @@ def TMPinvSolve(
         constructed from contiguous submatrices of the original table.
         For example, reduced = (6, 6) implies 5×5 data blocks with 1 slack
         row and 1 slack column each (edge blocks may be smaller).
+    symmetric : bool, default = False
+        If True, enforces symmetry of the estimated solution matrix as:
+        x = 0.5 * (x + x.T)
+        Applies to TMPinvResult.x only. For TMPinvResult.model symmetry,
+        add explicit symmetry constraints to M in a full-model solve instead
+        of using this flag.
 
     Returns
     -------
@@ -129,8 +137,8 @@ def TMPinvSolve(
     Notes
     ----
     In the reduced model, `S` is ignored. Slack behavior is derived implicitly
-    from block-wise marginal totals. Likewise, `M` must be a row subset of an
-    identity matrix (i.e., diagonal-only). Arbitrary or non-diagonal model
+    from block-wise marginal totals. Likewise, `M` must be a unique row subset
+    of an identity matrix (i.e., diagonal-only). Arbitrary or non-diagonal model
     matrices cannot be mapped to reduced blocks, making the model infeasible.
     """
     # (m), (p) Process the parameters, assert conformity, and get dimensions
@@ -144,13 +152,25 @@ def TMPinvSolve(
     b_col = np.asarray(b_col, dtype=np.float64).reshape(-1, 1)
     m     = b_row.shape[0]
     p     = b_col.shape[0]
+    if  S     is not None:
+        S = np.asarray(S, dtype=np.float64)
+        if S.shape != (m + p, m + p):
+            raise TMPinvInputError(f"S must have shape {(m+p, m+p)}.")
+        if (not np.all((S == -1) | (S == 0) | (S == 1)) or
+                np.abs(S).sum(axis=0).max() > 1         or
+                np.abs(S).sum(axis=1).max() > 1):
+            raise TMPinvInputError("S must be a zero-padded subset of ±I.")
     if  M     is not None:
+        if  b_val is None:
+            raise TMPinvInputError("Both M and b_val must be defined.")
         M = np.asarray(M, dtype=np.float64)
         if  M.ndim == 1:
             M = M.reshape(1, -1)
         if  M.shape[1] != m * p:
             raise TMPinvInputError(f"M must have exactly {m * p} columns.")
     if  b_val is not None:
+        if  M     is None:
+            raise TMPinvInputError("Both M and b_val must be defined.")
         if not np.isfinite(b_val).all():
             raise TMPinvInputError("b_val must not contain inf or NaN.")
         b_val = np.asarray(b_val, dtype=np.float64).reshape(-1, 1)
@@ -159,6 +179,11 @@ def TMPinvSolve(
             raise TMPinvInputError(f"M and b_val must have the same number "
                                    f"of rows: "
                                    f"{M.shape[0]} vs {b_val.shape[0]}")
+    kw = {k: v for k, v in kwargs.items() if k not in {"b", "S", "M",
+                                                       "m", "p",
+                                                       "i", "j",
+                                                       "zero_diagonal",
+                                                       "symmetric"}}
 
     # perform full estimation and return the result
     if  reduced is None:
@@ -167,13 +192,16 @@ def TMPinvSolve(
         if b_val is not None:
             b_blocks.append(b_val)
         b = np.vstack(b_blocks)
-        result.model = CLSP().solve(problem='ap', b=b, S=S, M=M,
-                                    m=m,
-                                    p=p,
-                                    i=i,
-                                    j=j,
-                                    zero_diagonal=zero_diagonal,
-                                    *args, **kwargs)
+        result.model = CLSP().solve(*args,
+                                    problem='ap', b=b,
+                                                  S=S,
+                                                  M=M,
+                                                  m=m,
+                                                  p=p,
+                                                  i=i,
+                                                  j=j,
+                                                  zero_diagonal=zero_diagonal,
+                                    **kw)
         result.x = result.model.x
 
     # perform reduced estimation and return the result
@@ -185,44 +213,69 @@ def TMPinvSolve(
         result   = TMPinvResult(False, [], np.empty((m, p), dtype=float))
         m_subset = reduced[0] - 1
         p_subset = reduced[1] - 1
+        if  zero_diagonal:                             # not processed by CLSP
+            M_diag = np.zeros((min(m, p), m * p))
+            b_diag = np.zeros((min(m, p),     1))
+            for k in range(min(m, p)):
+                M_diag[k, k * p + k] = 1
+            M, idx = np.unique(M_diag.copy() if M     is None or M.size     == 0
+                                             else np.vstack([M,     M_diag]),
+                               axis=0,       return_index=True)
+            b_val  = (b_diag.copy()          if b_val is None or b_val.size == 0
+                                             else np.vstack([b_val, b_diag])
+                     )[idx.reshape(-1)]
+            del M_diag, b_diag, idx
+    
         if  M is not None:
-            if not all(np.count_nonzero(row) == 1 and
-                       np.all((row == 0) | (row == 1)) for row in M):
-                raise TMPinvInputError("M must be a row subset of the identity "
-                                       "matrix in the reduced model.")
-            M = (np.abs(np.sign(M)) * b_val).sum(axis=0).reshape(m, p)
+            if  not ((np.isclose(M, 0) | np.isclose(M, 1)).all() and
+                     (np.isclose(M, 1).sum(axis=1) == 1).all()   and
+                     (np.isclose(M, 1).sum(axis=0) <= 1).all()):
+                raise TMPinvInputError("M must be a unique row subset of the "
+                                       "identity matrix in the reduced model.")
+            X_true = np.full((m, p), np.nan, dtype=np.float64)
+            for idx, row in enumerate(M):
+                col = np.argmax(row)
+                r, c = divmod(col, p)                  # M has m * p columns
+                X_true[r, c] = b_val.ravel()[idx]
+        if  S is not None:
+            warnings.warn("User-provided S is ignored in the reduced model.",
+                          UserWarning)
         for row_block in range(ceil(m / m_subset)):
             for col_block in range(ceil(p / p_subset)):
                 m_start  = row_block * m_subset
                 m_end    = min(m_start + m_subset, m)
                 p_start  = col_block * p_subset
                 p_end    = min(p_start + p_subset, p)
-                S        = np.ones(((m_end - m_start) + (p_end - p_start), 1))
-                b_blocks = [b_row[m_start:m_end].reshape(-1, 1),
+                S_subset = np.eye((m_end - m_start) + (p_end - p_start))
+                b_subset = [b_row[m_start:m_end].reshape(-1, 1),
                             b_col[p_start:p_end].reshape(-1, 1)]
-                M_subset, b_val_subset = None, None
-                if  M is not None:
-                    M_subset     = np.diag(np.sign(M[m_start:m_end,
-                                                     p_start:p_end]).flatten())
-                    b_val_subset = M[m_start:m_end,
-                                     p_start:p_end].reshape(-1, 1)
-                    if np.any(M_subset):               # drop zero rows
-                        nonzero_rows = np.diag(M_subset) != 0
-                        M_subset     = M_subset[nonzero_rows]
-                        b_val_subset = b_val_subset[nonzero_rows].reshape(-1, 1)
-                        b_blocks.append(b_val_subset)
-                    else:
-                        M_subset, b_val_subset = None, None
-                b        = np.vstack(b_blocks)
-                tmp      = CLSP().solve(problem='ap', b=b, S=S, M=M_subset,
-                                        m=m_end - m_start,
-                                        p=p_end - p_start,
-                                        i=i,
-                                        j=j,
-                                        zero_diagonal=False,
-                                        *args, **kwargs)
+                M_subset = None
+                if M is not None:
+                    subset       = X_true[m_start:m_end, p_start:p_end].ravel()
+                    non_empty    = ~np.isnan(subset)
+                    if non_empty.any():
+                        M_subset = np.eye(subset.size,
+                                          dtype=np.float64)[non_empty]
+                        b_subset.append(subset[non_empty].reshape(-1, 1))
+                tmp      = CLSP().solve(*args,
+                                        problem='ap', b=np.vstack(b_subset),
+                                                      S=S_subset,
+                                                      M=M_subset,
+                                                      m=m_end - m_start,
+                                                      p=p_end - p_start,
+                                                      i=i,
+                                                      j=j,
+                                                      zero_diagonal=False,
+                                        **kw)
                 result.model.append(tmp)
                 result.x[m_start:m_end, p_start:p_end] = tmp.x
+
+    # enforce symmetry
+    if  symmetric:
+        if  result.x.shape[0] != result.x.shape[1]:
+            raise TMPinvInputError("symmetric=True requires a square matrix "
+                                   "(m == p).")
+        result.x = float(0.5) * (result.x + result.x.T)
 
     return result
 
@@ -252,7 +305,7 @@ def tmpinv(
     iteration_limit : int, default = 50
         Maximum number of iterations allowed in the refinement loop.
     *args, **kwargs : additional arguments
-        Passed directly to TMPinvSolver().
+        Passed directly to TMPinvSolve().
 
     Returns
     -------
@@ -279,22 +332,22 @@ def tmpinv(
             (h is not None and h < 0) for l, h in bounds):
         raise TMPinvInputError("Negative lower or upper bounds are not "
                                "allowed in tabular matrix programs.")
+    kw = {k: v for k, v in kwargs.items() if k not in {"M", "b_val"}}
 
     # (result) Perform bound-constrained iterative refinement
     for _ in range(iteration_limit):
         M_idx, b_val = [], []
         x = result.x.reshape(-1, 1)
         for i, (v, (l, h)) in enumerate(zip(x, bounds)):
+            v = float(v.item())
             if ((l is not None and v < l - tolerance) or                       \
                 (h is not None and v > h + tolerance)):
                 continue                               # skip out-of-bounds
             M_idx.append(i)
-            b_val.append(float(v.item()))
+            b_val.append(v)
         if len(M_idx) < n_cells:
             M      = np.eye(n_cells, dtype=np.float64)[M_idx]
-            result = TMPinvSolve(M=M, b_val=b_val,
-                                 *args, **{k: v for k, v in kwargs.items()
-                                                if k not in {"M", "b_val"}})
+            result = TMPinvSolve(*args, M=M, b_val=b_val, **kw)
         else:
             break
 
@@ -306,5 +359,10 @@ def tmpinv(
                          for  _, h in bounds]).reshape(-1, 1)
     x[(x < x_lb - tolerance) | (x > x_ub + tolerance)] = replace_value
     result.x = x.reshape(result.x.shape)
+
+    # enforce (final) symmetry
+    if  kwargs.get("symmetric", False):
+        if  result.x.shape[0] == result.x.shape[1]:
+            result.x = float(0.5) * (result.x + result.x.T)
 
     return result
