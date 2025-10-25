@@ -80,6 +80,7 @@ for kw, val in result.model.ttest(sample_size=30,                    # NRMSE sam
                                   partial=True).items():
     print(f"    {kw}: {float(val):.6f}")
 
+
 # AP (TM), based on a trade matrix, with a zero diagonal and 20% of known values
 
 seed   = 123456789
@@ -238,6 +239,7 @@ A single CLSP object in the full model, or a list of CLSP objects for each reduc
 Final estimated solution matrix of shape *(m, p)*.
 
 ## Bibliography
+Bolotov, I. (2025). CLSP: Linear Algebra Foundations of a Modular Two-Step Convex Optimization-Based Estimator for Ill-Posed Problems. *Mathematics*, *13*(21), 3476. [https://doi.org/10.3390/math13213476](https://doi.org/10.3390/math13213476)
 
 To be added.
 
