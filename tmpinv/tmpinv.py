@@ -136,10 +136,13 @@ def TMPinvSolve(
 
     Notes
     ----
-    In the reduced model, `S` is ignored. Slack behavior is derived implicitly
+    - In the reduced model, `S` is ignored. Slack behavior is derived implicitly
     from block-wise marginal totals. Likewise, `M` must be a unique row subset
     of an identity matrix (i.e., diagonal-only). Arbitrary or non-diagonal model
     matrices cannot be mapped to reduced blocks, making the model infeasible.
+    - This function receives internal keyword arguments ['b_lim' : array_like,
+    'C_lim' : array_like] from `tmpinv()` containing cell value bounds. These
+    arguments are ignored in the reduced model given its replacement of `S`.
     """
     # (m), (p) Process the parameters, assert conformity, and get dimensions
     if  b_row is None or b_col is None:
@@ -150,12 +153,14 @@ def TMPinvSolve(
         raise TMPinvInputError("b_row and b_col must not contain inf or NaN.")
     b_row = np.asarray(b_row, dtype=np.float64).reshape(-1, 1)
     b_col = np.asarray(b_col, dtype=np.float64).reshape(-1, 1)
-    m     = b_row.shape[0]
-    p     = b_col.shape[0]
+    m     = b_row.shape[0] * i
+    p     = b_col.shape[0] * j
     if  S     is not None:
-        S = np.asarray(S, dtype=np.float64)
-        if S.shape != (m + p, m + p):
-            raise TMPinvInputError(f"S must have shape {(m+p, m+p)}.")
+        n_rows = m + p + (kwargs.get("C_lim").shape[0]
+                          if kwargs.get("C_lim") is not None else 0)
+        S      = np.asarray(S, dtype=np.float64)
+        if S.shape[0] != n_rows:
+            raise TMPinvInputError(f"S must have {n_rows} rows.")
         if (not np.all((S == -1) | (S == 0) | (S == 1)) or
                 np.abs(S).sum(axis=0).max() > 1         or
                 np.abs(S).sum(axis=1).max() > 1):
@@ -179,7 +184,8 @@ def TMPinvSolve(
             raise TMPinvInputError(f"M and b_val must have the same number "
                                    f"of rows: "
                                    f"{M.shape[0]} vs {b_val.shape[0]}")
-    kw = {k: v for k, v in kwargs.items() if k not in {"b", "S", "M",
+    kw = {k: v for k, v in kwargs.items() if k not in {"b_lim", "b",
+                                                       "C_lim", "S", "M",
                                                        "m", "p",
                                                        "i", "j",
                                                        "zero_diagonal",
@@ -189,11 +195,15 @@ def TMPinvSolve(
     if  reduced is None:
         result   = TMPinvResult(True,  None, np.empty((m, p), dtype=float))
         b_blocks = [b_row, b_col]
+        if kwargs.get("b_lim") is not None:
+            b_blocks.append(np.asarray(kwargs["b_lim"],
+                            dtype=np.float64).reshape(-1, 1))
         if b_val is not None:
             b_blocks.append(b_val)
         b = np.vstack(b_blocks)
         result.model = CLSP().solve(*args,
                                     problem='ap', b=b,
+                                                  C=kwargs.get("C_lim"),
                                                   S=S,
                                                   M=M,
                                                   m=m,
@@ -328,13 +338,30 @@ def tmpinv(
             bounds = bounds * n_cells                  # replicate (low, high)
     if  all(l is None and h is None for l, h in bounds):
         return result                                  # finish if unbounded
-    if  any((l is not None and l < 0) or
-            (h is not None and h < 0) for l, h in bounds):
-        raise TMPinvInputError("Negative lower or upper bounds are not "
-                               "allowed in tabular matrix programs.")
-    kw = {k: v for k, v in kwargs.items() if k not in {"M", "b_val"}}
 
     # (result) Perform bound-constrained iterative refinement
+    kw    = {k: v for k, v in kwargs.items() if k not in {"b_lim", "b_val",
+                                                          "C_lim", "S", "M"}}
+    b_lim = np.vstack([np.array([h if h is not None else np.inf  for l, h
+                                 in bounds]).reshape(-1, 1),
+                       np.array([l if l is not None else -np.inf for l, h
+                                 in bounds]).reshape(-1, 1)])
+    C_lim = np.vstack([np.tile(np.eye(n_cells), (2,1))])
+    S     = (kwargs.get("S") if kwargs.get("S") is not None
+             else np.zeros((len(kwargs["b_row"]) + len(kwargs["b_col"]), 0)))
+    S     = np.vstack([np.hstack([S, np.zeros((S.shape[0], 2 * n_cells))]),
+                       np.hstack([np.zeros((n_cells, S.shape[1])),
+                                  np.eye(n_cells), np.zeros((n_cells,
+                                                             n_cells))]),
+                      -np.hstack([np.zeros((n_cells, S.shape[1] + n_cells)),
+                                  np.eye(n_cells)])])
+    finite_rows  = np.isfinite(b_lim[:, 0])            # drop rows with ±np.inf
+    nonzero_cols = ~np.all(S[np.concatenate([
+                                 np.ones(S.shape[0] -
+                                         b_lim.shape[0],
+                                         dtype=bool),
+                                 finite_rows]),
+                             :] == 0, axis=0)          # reduce S width
     for _ in range(iteration_limit):
         M_idx, b_val = [], []
         x = result.x.reshape(-1, 1)
@@ -347,7 +374,16 @@ def tmpinv(
             b_val.append(v)
         if len(M_idx) < n_cells:
             M      = np.eye(n_cells, dtype=np.float64)[M_idx]
-            result = TMPinvSolve(*args, M=M, b_val=b_val, **kw)
+            result = TMPinvSolve(*args, b_lim=(b_lim[finite_rows, :]),
+                                        b_val=b_val,
+                                        C_lim=(C_lim[finite_rows, :]),
+                                        S=(S[np.concatenate([
+                                                 np.ones(S.shape[0] -
+                                                         b_lim.shape[0],
+                                                         dtype=bool),
+                                                 finite_rows]),
+                                             :])[:,nonzero_cols],
+                                        M=M, **kw)
         else:
             break
 
