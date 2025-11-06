@@ -46,6 +46,7 @@ def fmt(v):
     return f"{v:.4e}" if abs(v) >= 1e6 or (v != 0 and abs(v) < 1e-4) else f"{v:.6f}"
 
 # results
+# (for a full model, one can simply type `result.model.summary(display=True)`)
 print("true X:")
 print(np.round(np.asarray(X_true), 4))
 print("X_hat:")
@@ -74,12 +75,11 @@ print("  R2_user_defined      :", fmt(1 - ss_res / ss_tot))
 print("  NRMSE                :", fmt(result.model.nrmse))
 print("  Diagnostic band (min):", fmt(np.min(result.model.x_lower)))
 print("  Diagnostic band (max):", fmt(np.max(result.model.x_upper)))
-print("  Monte Carlo t-test:")
+print("  Bootstrap t-test:")
 for kw, val in result.model.ttest(sample_size=30,                    # NRMSE sample
                                   seed=seed, distribution="normal",  # seed and distribution
                                   partial=True).items():
     print(f"    {kw}: {float(val):.6f}")
-
 
 # AP (TM), based on a trade matrix, with a zero diagonal and 20% of known values
 
@@ -140,7 +140,7 @@ print("  R2_user_defined      :", fmt(1 - ss_res / ss_tot                       
 print("  NRMSE                :", fmt(np.min(nrmse)),      "-", fmt(np.max(nrmse)     ))
 print("  Diagnostic band (min):", fmt(np.min(x_lower)),    "-", fmt(np.max(x_lower)   ))
 print("  Diagnostic band (max):", fmt(np.min(x_upper)),    "-", fmt(np.max(x_upper)   ))
-print("  Monte Carlo t-test:")
+print("  Bootstrap t-test:")
 ttests     = [CLSP.ttest(sample_size=30, seed=seed,
                          distribution="normal")                 for CLSP in result.model]
 keys       = ttests[0].keys()
@@ -153,7 +153,7 @@ for kw in keys:
 
 For comprehensive information on the estimator's capabilities, advanced configuration options, and implementation details, please refer to the [pyclsp module](https://pypi.org/project/pyclsp/ "Convex Least Squares Programming"), on which TMPinv is based.
 
-**TMPINV Parameters:**
+**TMPinv Parameters:**
 
 `S` : *array_like* of shape *(m + p, m + p)*, optional
 A diagonal sign slack (surplus) matrix with entries in *{0, ±1}*.
@@ -240,8 +240,6 @@ Final estimated solution matrix of shape *(m, p)*.
 
 ## Bibliography
 Bolotov, I. (2025). CLSP: Linear Algebra Foundations of a Modular Two-Step Convex Optimization-Based Estimator for Ill-Posed Problems. *Mathematics*, *13*(21), 3476. [https://doi.org/10.3390/math13213476](https://doi.org/10.3390/math13213476)
-
-To be added.
 
 ## License
 
