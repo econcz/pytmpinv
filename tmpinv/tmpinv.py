@@ -72,6 +72,29 @@ class TMPinvResult:
         self.model = model
         self.x     = x
 
+    def summarize(self, i: int | None = None, display : bool = False):
+        return self.summary(i=i, display=display)
+
+    def summary(self, i: int | None = None, display: bool = False):
+        """
+        Return or print a summary for the TMPinv estimator.
+
+        Parameters
+        ----------
+        display : bool, default = False
+            If True, prints the summary instead of returning a dictionary.
+        """
+        if not isinstance(self.model, list):
+            return self.model.summarize(display=display)
+        if i is None:
+            raise TMPinvInputError("Reduced model: please supply the block " +
+                                   "index using i=#.")
+        idx = int(i)
+        if idx < 0 or idx > len(self.model) - 1:
+            raise TMPinvInputError(f"i must be in 0..{len(self.model)}-1 "   +
+                                   f"for reduced model.")
+        return self.model[idx].summarize(display=display)
+
 def TMPinvSolve(
     S:             Sequence[Sequence[float]] | None = None,
     M:             Sequence[Sequence[float]] | None = None,
@@ -216,6 +239,7 @@ def TMPinvSolve(
 
     # perform reduced estimation and return the result
     else:
+        reduced  = tuple(map(int, reduced))
         if  reduced[0] < 3 or reduced[1] < 3:
             raise TMPinvInputError("Each reduced block must be at least "
                                    "(3, 3) to allow a solvable CLSP submatrix "
@@ -324,7 +348,8 @@ def tmpinv(
         matrix `x`.
     """
     # (n_cells) Perform initial estimation and get cell count
-    result  = TMPinvSolve(*args, **kwargs)
+    result  = TMPinvSolve(*args, tolerance=tolerance,
+                                 iteration_limit=iteration_limit, **kwargs)
     n_cells = result.x.shape[0] * result.x.shape[1]
     if  bounds is None:
         bounds = (None, None)
@@ -383,7 +408,8 @@ def tmpinv(
                                                          dtype=bool),
                                                  finite_rows]),
                                              :])[:,nonzero_cols],
-                                        M=M, **kw)
+                                        M=M, tolerance=tolerance,
+                                        iteration_limit=iteration_limit, **kw)
         else:
             break
 

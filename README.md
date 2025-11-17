@@ -46,7 +46,7 @@ def fmt(v):
     return f"{v:.4e}" if abs(v) >= 1e6 or (v != 0 and abs(v) < 1e-4) else f"{v:.6f}"
 
 # results
-# (for a full model, one can simply type `result.model.summary(display=True)`)
+# (for a summary, use result.summary(display=True) or result.summary(i=0, display=True))
 print("true X:")
 print(np.round(np.asarray(X_true), 4))
 print("X_hat:")
@@ -155,88 +155,94 @@ For comprehensive information on the estimator's capabilities, advanced configur
 
 **TMPinv Parameters:**
 
-`S` : *array_like* of shape *(m + p, m + p)*, optional
-A diagonal sign slack (surplus) matrix with entries in *{0, ±1}*.
--   *0* enforces equality (== `b_row` or `b_col`),
--  *1* enforces a lower-than-or-equal (≤) condition,
+`S` : *array_like* of shape *(m + p, m + p)*, optional<br>
+A diagonal sign slack (surplus) matrix with entries in *{0, ±1}*.<br>
+-   *0* enforces equality (== `b_row` or `b_col`),<br>
+-  *1* enforces a lower-than-or-equal (≤) condition,<br>
 - *–1* enforces a greater-than-or-equal (≥) condition.
 
 The first `m` diagonal entries correspond to row constraints, and the remaining `p` to column constraints. Please note that, in the reduced model, `S` is ignored: slack behavior is derived implicitly from block-wise marginal totals.
 
-`M` : *array_like* of shape *(k, m * p)*, optional
+`M` : *array_like* of shape *(k, m * p)*, optional<br>
 A model matrix with entries in *{0, 1}*. Each row defines a linear restriction on the flattened solution matrix. The corresponding right-hand side values must be provided in `b_val`. This block is used to encode known cell values. Please note that, in the reduced model, `M` must be a unique row subset of an identity matrix (i.e., diagonal-only). Arbitrary or non-diagonal model matrices cannot be mapped to reduced blocks, making the model infeasible.
 
-`b_row` : *array_like* of shape *(m,)*
+`b_row` : *array_like* of shape *(m,)*<br>
 Right-hand side vector of row totals. Please note that both `b_row` and `b_col` must be provided.
 
-`b_col` : *array_like* of shape *(p,)*
+`b_col` : *array_like* of shape *(p,)*<br>
 Right-hand side vector of column totals. Please note that both `b_row` and `b_col` must be provided.
 
-`b_val` : *array_like* of shape *(k,)*
+`b_val` : *array_like* of shape *(k,)*<br>
 Right-hand side vector of known cell values.
 
-`i` : *int*, default = *1*
+`i` : *int*, default = *1*<br>
 Number of row groups.
 
-`j` : *int*, default = *1*
+`j` : *int*, default = *1*<br>
 Number of column groups.
 
-`zero_diagonal` : *bool*, default = *False*
+`zero_diagonal` : *bool*, default = *False*<br>
 If *True*, enforces the zero diagonal.
 
-`reduced` : *tuple* of *(int, int)*, optional
+`reduced` : *tuple* of *(int, int)*, optional<br>
 Dimensions of the reduced problem. If specified, the problem is estimated as a set of reduced problems constructed from contiguous submatrices of the original table. For example, `reduced` = *(6, 6)* implies *5×5* data blocks with *1* slack row and *1* slack column each (edge blocks may be smaller).
 
-`symmetric` : *bool*, default = *False*
+`symmetric` : *bool*, default = *False*<br>
 If True, enforces symmetry of the estimated solution matrix as: x = 0.5 * (x + x.T)
 Applies to TMPinvResult.x only. For TMPinvResult.model symmetry, add explicit symmetry constraints to M in a full-model solve instead of using this flag.
 
-`bounds` : *sequence* of *(low, high)*, optional
+`bounds` : *sequence* of *(low, high)*, optional<br>
 Bounds on cell values. If a single tuple *(low, high)* is given, it is applied to all `m` * `p` cells. Example: *(0, None)*.
 
-`replace_value` : *float* or *None*, default = *np.nan*
+`replace_value` : *float* or *None*, default = *np.nan*<br>
 Final replacement value for any cell in the solution matrix that violates the specified bounds by more than the given tolerance.
 
-`tolerance` : *float*, default = *square root of machine epsilon*
+`tolerance` : *float*, default = *square root of machine epsilon*<br>
 Convergence tolerance for bounds.
 
-`iteration_limit` : *int*, default = *50*
+`iteration_limit` : *int*, default = *50*<br>
 Maximum number of iterations allowed in the refinement loop.
 
 **CLSP Parameters:**
 
-`r` : *int*, default = *1*
+`r` : *int*, default = *1*<br>
 Number of refinement iterations for the pseudoinverse-based estimator.
 
-`Z` : *np.ndarray* or *None*
+`Z` : *np.ndarray* or *None*<br>
 A symmetric idempotent matrix (projector) defining the subspace for Bott–Duffin pseudoinversion. If *None*, the identity matrix is used, reducing the Bott–Duffin inverse to the Moore–Penrose case.
 
-`final` : *bool*, default = *True*
+`final` : *bool*, default = *True*<br>
 If *True*, a convex programming problem is solved to refine `zhat`. The resulting solution `z` minimizes a weighted L1/L2 norm around `zhat` subject to `Az = b`.
 
-`alpha` : *float*, *list[float]* or *None*, default = *None*
-    Regularization parameter (weight) in the final convex program:
-    - `α = 0`: Lasso (L1 norm)
-    - `α = 1`: Tikhonov Regularization/Ridge (L2 norm)
-    - `0 < α < 1`: Elastic Net
-    If a scalar float is provided, that value is used after clipping to [0, 1].
-    If a list/iterable of floats is provided, each candidate is evaluated via a full solve, and the α with the smallest NRMSE is selected.
+`alpha` : *float*, *list[float]* or *None*, default = *None*<br>
+    Regularization parameter (weight) in the final convex program:<br>
+    - `α = 0`: Lasso (L1 norm)<br>
+    - `α = 1`: Tikhonov Regularization/Ridge (L2 norm)<br>
+    - `0 < α < 1`: Elastic Net<br>
+    If a scalar float is provided, that value is used after clipping to [0, 1].<br>
+    If a list/iterable of floats is provided, each candidate is evaluated via a full solve, and the α with the smallest NRMSE is selected.<br>
     If None, α is chosen, based on an error rule: α = min(1.0, NRMSE_{α = 0} / (NRMSE_{α = 0} + NRMSE_{α = 1} + tolerance))
 
-`*args`, `**kwargs` : optional
+`*args`, `**kwargs` : optional<br>
 CVXPY arguments passed to the CVXPY solver.
 
 **Returns:**
 *TMPinvResult*
 
-`TMPinvResult.full` : *bool*
+`TMPinvResult.full` : *bool*<br>
 Indicates if this result comes from the full (non-reduced) model.
 
-`TMPinvResult.model` : *CLSP* or *list* of *CLSP*
+`TMPinvResult.model` : *CLSP* or *list* of *CLSP*<br>
 A single CLSP object in the full model, or a list of CLSP objects for each reduced block in the reduced model.
 
-`TMPinvResult.x` : *np.ndarray*
+`TMPinvResult.x` : *np.ndarray*<br>
 Final estimated solution matrix of shape *(m, p)*.
+
+`TMPinvResult.summarize(i, display)`<br>
+An alias of TMPinvResult.summary().
+
+`TMPinvResult.summary(i, display)`<br>
+Return or print a summary of the underlying CLSP result, where `i` : int, default = *None* is the index of a reduced-block model in TMPinvResult.model.
 
 ## Bibliography
 Bolotov, I. (2025). CLSP: Linear Algebra Foundations of a Modular Two-Step Convex Optimization-Based Estimator for Ill-Posed Problems. *Mathematics*, *13*(21), 3476. [https://doi.org/10.3390/math13213476](https://doi.org/10.3390/math13213476)
