@@ -42,7 +42,7 @@ class TMPinvInputError(Exception):
         super().__init__(full_message)
         
     def __str__(self) -> str:
-        return self.message if self.code is None \
+        return self.message if self.code is None                               \
                             else f"{self.message} [Code: {self.code}]"
     
     def as_dict(self) -> dict:
@@ -247,6 +247,7 @@ def TMPinvSolve(
         result   = TMPinvResult(False, [], np.empty((m, p), dtype=float))
         m_subset = reduced[0] - 1
         p_subset = reduced[1] - 1
+
         if  zero_diagonal:                             # not processed by CLSP
             M_diag = np.zeros((min(m, p), m * p))
             b_diag = np.zeros((min(m, p),     1))
@@ -259,40 +260,81 @@ def TMPinvSolve(
                                              else np.vstack([b_val, b_diag])
                      )[idx.reshape(-1)]
             del M_diag, b_diag, idx
-    
         if  M is not None:
             if  not ((np.isclose(M, 0) | np.isclose(M, 1)).all() and
                      (np.isclose(M, 1).sum(axis=1) == 1).all()   and
                      (np.isclose(M, 1).sum(axis=0) <= 1).all()):
                 raise TMPinvInputError("M must be a unique row subset of the "
                                        "identity matrix in the reduced model.")
-            X_true = np.full((m, p), np.nan, dtype=np.float64)
+            X_true = np.full((1*m, p), np.nan, dtype=np.float64)
             for idx, row in enumerate(M):
-                col = np.argmax(row)
+                col  = np.argmax(row)
                 r, c = divmod(col, p)                  # M has m * p columns
                 X_true[r, c] = b_val.ravel()[idx]
-        if  S is not None:
+        if kwargs.get("b_lim") is not None:
+            X_lim  = np.full((2*m, p), np.nan, dtype=np.float64)
+            l_idx  = (lambda x: kwargs["b_lim"].shape[0]    if not x.size else
+                     x[0,0])(np.argwhere(S[-kwargs["b_lim"].shape[0]:,:] == -1))
+            if l_idx > 0:                              # upper bounds
+                for idx, row in enumerate(kwargs["C_lim"][:l_idx,:]):
+                    col  = np.argmax(row)
+                    r, c = divmod(col, p)
+                    X_lim[  r, c] = kwargs["b_lim"].ravel()[      idx]
+            if l_idx < kwargs["b_lim"].shape[0]:       # lower bounds
+                for idx, row in enumerate(kwargs["C_lim"][l_idx:,:]):
+                    col  = np.argmax(row)
+                    r, c = divmod(col, p)
+                    X_lim[m+r, c] = kwargs["b_lim"].ravel()[l_idx+idx]
+        if  S is not None and np.any(S[: S.shape[0] if kwargs.get("b_lim")
+                          is  None else -kwargs["b_lim"].shape[0],:] != 0):
             warnings.warn("User-provided S is ignored in the reduced model.",
                           UserWarning)
+
         for row_block in range(ceil(m / m_subset)):
             for col_block in range(ceil(p / p_subset)):
                 m_start  = row_block * m_subset
                 m_end    = min(m_start + m_subset, m)
                 p_start  = col_block * p_subset
                 p_end    = min(p_start + p_subset, p)
+                C_subset = None
                 S_subset = np.eye((m_end - m_start) + (p_end - p_start))
                 b_subset = [b_row[m_start:m_end].reshape(-1, 1),
                             b_col[p_start:p_end].reshape(-1, 1)]
                 M_subset = None
-                if M is not None:
+                if M                   is not None:
                     subset       = X_true[m_start:m_end, p_start:p_end].ravel()
                     non_empty    = ~np.isnan(subset)
                     if non_empty.any():
-                        M_subset = np.eye(subset.size,
-                                          dtype=np.float64)[non_empty]
                         b_subset.append(subset[non_empty].reshape(-1, 1))
+                        M_subset = np.eye(subset.size,
+                                          dtype=np.float64)[non_empty,:]
+                if kwargs.get("b_lim") is not None:
+                    subset       = np.vstack([
+                                       X_lim[  m_start:  m_end, p_start:p_end],
+                                       X_lim[m+m_start:m+m_end, p_start:p_end]
+                                 ]).ravel()
+                    non_empty = ~np.isnan(subset)
+                    if non_empty.any():
+                        b_subset.append(subset[non_empty].reshape(-1, 1))
+                        C_subset = np.vstack([np.tile(   np.eye(subset.size//2),
+                                             (2,1))])[non_empty,:]
+                        S        = np.hstack([np.vstack([np.eye(subset.size//2),
+                                                         np.zeros((subset.size//
+                                                         2, subset.size//2))
+                                                       ])[non_empty,:],
+                                              np.vstack([np.zeros((subset.size//
+                                                         2, subset.size//2)),
+                                                        -np.eye(subset.size//2)
+                                                       ])[non_empty,:]      ])
+                        S_subset = np.vstack([np.hstack([S_subset, np.zeros((
+                                                         S_subset.shape[0],
+                                                         S.shape[1]       ))]),
+                                              np.hstack([np.zeros((S.shape[0],
+                                                         S_subset.shape[1])),
+                                                         S])                ])
                 tmp      = CLSP().solve(*args,
                                         problem='ap', b=np.vstack(b_subset),
+                                                      C=C_subset,
                                                       S=S_subset,
                                                       M=M_subset,
                                                       m=m_end - m_start,
