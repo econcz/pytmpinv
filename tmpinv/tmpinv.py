@@ -40,11 +40,11 @@ class TMPinvInputError(Exception):
         full_message = f"{message} (Code: {code})" if code is not None         \
                                                    else message
         super().__init__(full_message)
-        
+
     def __str__(self) -> str:
         return self.message if self.code is None                               \
                             else f"{self.message} [Code: {self.code}]"
-    
+
     def as_dict(self) -> dict:
         """
         Return the error as a dictionary for structured logging or JSON output.
@@ -172,10 +172,10 @@ def TMPinvSolve(
         raise TMPinvInputError("Both b_row and b_col must be provided.")
     if  len(b_row) < 2 or len(b_col) < 2:
         raise TMPinvInputError("Minimum length for b_row and b_col is 2.")
-    if  not np.isfinite(b_row).all() or not np.isfinite(b_col).all():
-        raise TMPinvInputError("b_row and b_col must not contain inf or NaN.")
     b_row = np.asarray(b_row, dtype=np.float64).reshape(-1, 1)
     b_col = np.asarray(b_col, dtype=np.float64).reshape(-1, 1)
+    if  not np.isfinite(b_row).all() or not np.isfinite(b_col).all():
+        raise TMPinvInputError("b_row and b_col must not contain inf or NaN.")
     m     = b_row.shape[0] * i
     p     = b_col.shape[0] * j
     if  S     is not None:
@@ -212,7 +212,7 @@ def TMPinvSolve(
                                                        "m", "p",
                                                        "i", "j",
                                                        "zero_diagonal",
-                                                       "symmetric"}}
+                                                       "symmetric", "bounds"}}
 
     # perform full estimation and return the result
     if  reduced is None:
@@ -270,23 +270,17 @@ def TMPinvSolve(
             for idx, row in enumerate(M):
                 col  = np.argmax(row)
                 r, c = divmod(col, p)                  # M has m * p columns
-                X_true[r, c] = b_val.ravel()[idx]
-        if kwargs.get("b_lim") is not None:
+                X_true[r, c] = b_val.ravel(order='C')[idx]
+        if kwargs.get("bounds") is not None:
             X_lim  = np.full((2*m, p), np.nan, dtype=np.float64)
-            l_idx  = (lambda x: kwargs["b_lim"].shape[0]    if not x.size else
-                     x[0,0])(np.argwhere(S[-kwargs["b_lim"].shape[0]:,:] == -1))
-            if l_idx > 0:                              # upper bounds
-                for idx, row in enumerate(kwargs["C_lim"][:l_idx,:]):
-                    col  = np.argmax(row)
-                    r, c = divmod(col, p)
-                    X_lim[  r, c] = kwargs["b_lim"].ravel()[      idx]
-            if l_idx < kwargs["b_lim"].shape[0]:       # lower bounds
-                for idx, row in enumerate(kwargs["C_lim"][l_idx:,:]):
-                    col  = np.argmax(row)
-                    r, c = divmod(col, p)
-                    X_lim[m+r, c] = kwargs["b_lim"].ravel()[l_idx+idx]
-        if  S is not None and np.any(S[: S.shape[0] if kwargs.get("b_lim")
-                          is  None else -kwargs["b_lim"].shape[0],:] != 0):
+            for flat_idx, (l, h) in enumerate(kwargs.get("bounds")):
+                r, c = divmod(flat_idx, p)
+                if h is not None:                      # upper bounds
+                    X_lim[  r, c] = float(h)
+                if l is not None:                      # lower bounds
+                    X_lim[m+r, c] = float(l)
+
+        if  S is not None and np.size(S) > 0:
             warnings.warn("User-provided S is ignored in the reduced model.",
                           UserWarning)
 
@@ -297,22 +291,16 @@ def TMPinvSolve(
                 p_start  = col_block * p_subset
                 p_end    = min(p_start + p_subset, p)
                 C_subset = None
-                S_subset = np.eye((m_end - m_start) + (p_end - p_start))
+                S_subset = np.eye((m_end - m_start) + (p_end - p_start),
+                                  dtype=np.float64)
                 b_subset = [b_row[m_start:m_end].reshape(-1, 1),
                             b_col[p_start:p_end].reshape(-1, 1)]
                 M_subset = None
-                if M                   is not None:
-                    subset       = X_true[m_start:m_end, p_start:p_end].ravel()
-                    non_empty    = ~np.isnan(subset)
-                    if non_empty.any():
-                        b_subset.append(subset[non_empty].reshape(-1, 1))
-                        M_subset = np.eye(subset.size,
-                                          dtype=np.float64)[non_empty,:]
-                if kwargs.get("b_lim") is not None:
+                if kwargs.get("bounds") is not None:
                     subset       = np.vstack([
                                        X_lim[  m_start:  m_end, p_start:p_end],
                                        X_lim[m+m_start:m+m_end, p_start:p_end]
-                                 ]).ravel()
+                                 ]).ravel(order='C')
                     non_empty = ~np.isnan(subset)
                     if non_empty.any():
                         b_subset.append(subset[non_empty].reshape(-1, 1))
@@ -332,6 +320,16 @@ def TMPinvSolve(
                                               np.hstack([np.zeros((S.shape[0],
                                                          S_subset.shape[1])),
                                                          S])                ])
+                        S_subset = S_subset[:, ~np.all(S_subset == 0, axis=0)]
+                if M                   is not None:
+                    subset       = X_true[m_start:m_end, p_start:p_end].ravel(
+                                       order='C'
+                                   )
+                    non_empty    = ~np.isnan(subset)
+                    if non_empty.any():
+                        b_subset.append(subset[non_empty].reshape(-1, 1))
+                        M_subset = np.eye(subset.size,
+                                          dtype=np.float64)[non_empty,:]
                 tmp      = CLSP().solve(*args,
                                         problem='ap', b=np.vstack(b_subset),
                                                       C=C_subset,
@@ -389,10 +387,13 @@ def tmpinv(
         An object containing the fitted CLSP model(s) and the solution
         matrix `x`.
     """
-    # (n_cells) Perform initial estimation and get cell count
-    result  = TMPinvSolve(*args, tolerance=tolerance,
-                                 iteration_limit=iteration_limit, **kwargs)
-    n_cells = result.x.shape[0] * result.x.shape[1]
+    # (n_cells) Get cell count from keyword arguments
+    if  kwargs.get("b_row") is None or kwargs.get("b_col") is None:
+        raise TMPinvInputError("Both b_row and b_col must be provided.")
+    if  len(kwargs.get("b_row")) < 2 or len(kwargs.get("b_col")) < 2:
+        raise TMPinvInputError("Minimum length for b_row and b_col is 2.")
+    n_cells = (len(kwargs.get("b_row")) * kwargs.get("i", 1) *
+               len(kwargs.get("b_col")) * kwargs.get("j", 1))
     if  bounds is None:
         bounds = (None, None)
     if  isinstance(bounds, tuple):
@@ -403,12 +404,11 @@ def tmpinv(
                                    f"match number of variables {n_cells}.")
         elif len(bounds) == 1:
             bounds = bounds * n_cells                  # replicate (low, high)
-    if  all(l is None and h is None for l, h in bounds):
-        return result                                  # finish if unbounded
 
     # (result) Perform bound-constrained iterative refinement
     kw    = {k: v for k, v in kwargs.items() if k not in {"b_lim", "b_val",
                                                           "C_lim", "S", "M"}}
+    kw.update({"bounds": bounds})
     b_lim = np.vstack([np.array([h if h is not None else np.inf  for l, h
                                  in bounds]).reshape(-1, 1),
                        np.array([l if l is not None else -np.inf for l, h
@@ -430,30 +430,34 @@ def tmpinv(
                                  finite_rows]),
                              :] == 0, axis=0)          # reduce S width
     for _ in range(iteration_limit):
-        M_idx, b_val = [], []
-        x = result.x.reshape(-1, 1)
-        for i, (v, (l, h)) in enumerate(zip(x, bounds)):
-            v = float(v.item())
-            if ((l is not None and v < l - tolerance) or                       \
-                (h is not None and v > h + tolerance)):
-                continue                               # skip out-of-bounds
-            M_idx.append(i)
-            b_val.append(v)
-        if len(M_idx) < n_cells:
-            M      = np.eye(n_cells, dtype=np.float64)[M_idx]
-            result = TMPinvSolve(*args, b_lim=(b_lim[finite_rows, :]),
-                                        b_val=b_val,
-                                        C_lim=(C_lim[finite_rows, :]),
-                                        S=(S[np.concatenate([
-                                                 np.ones(S.shape[0] -
-                                                         b_lim.shape[0],
-                                                         dtype=bool),
-                                                 finite_rows]),
-                                             :])[:,nonzero_cols],
-                                        M=M, tolerance=tolerance,
-                                        iteration_limit=iteration_limit, **kw)
+        if _ > 0:
+            M_idx, b_val = [], []
+            x = result.x.reshape(-1, 1)
+            for i, (v, (l, h)) in enumerate(zip(x, bounds)):
+                v = float(v.item())
+                if ((l is not None and v < l - tolerance) or                   \
+                    (h is not None and v > h + tolerance)):
+                    continue                           # skip out-of-bounds
+                M_idx.append(i)
+                b_val.append(v)
+            if len(M_idx) < n_cells:
+                M = np.eye(n_cells, dtype=np.float64)[M_idx]
+            else:
+                break
         else:
-            break
+            M,     b_val = kwargs.get("M"), kwargs.get("b_val")
+
+        result = TMPinvSolve(*args, b_lim=(b_lim[finite_rows, :]),
+                                    b_val=b_val,
+                                    C_lim=(C_lim[finite_rows, :]),
+                                    S=(S[np.concatenate([
+                                             np.ones(S.shape[0] -
+                                                     b_lim.shape[0],
+                                                     dtype=bool),
+                                             finite_rows]),
+                                         :])[:,nonzero_cols],
+                                    M=M, tolerance=tolerance,
+                                    iteration_limit=iteration_limit, **kw)
 
     # (result) Replace out-of-bound values with `replace_value`
     x        = result.x.reshape(-1, 1)

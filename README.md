@@ -5,7 +5,7 @@ The **Tabular Matrix Problems via Pseudoinverse Estimation (TMPinv)** is a two-s
 ## Installation
 
 ```bash
-pip install tmpinv
+pip install pytmpinv
 ```
 
 ## Quick Example
@@ -78,7 +78,7 @@ print("  Diagnostic band (max):", fmt(np.max(result.model.x_upper)))
 print("  Bootstrap t-test:")
 for kw, val in result.model.ttest(sample_size=30,                    # NRMSE sample
                                   seed=seed, distribution="normal",  # seed and distribution
-                                  partial=True).items():
+                                 ).items():
     print(f"    {kw}: {float(val):.6f}")
 
 # AP (TM), based on a trade matrix, with a zero diagonal and 20% of known values
