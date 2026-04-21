@@ -5,7 +5,7 @@ The **Tabular Matrix Problems via Pseudoinverse Estimation (TMPinv)** is a two-s
 ## Installation
 
 ```bash
-pip install tmpinv
+pip install pytmpinv
 ```
 
 ## Quick Example
@@ -78,7 +78,7 @@ print("  Diagnostic band (max):", fmt(np.max(result.model.x_upper)))
 print("  Bootstrap t-test:")
 for kw, val in result.model.ttest(sample_size=30,                    # NRMSE sample
                                   seed=seed, distribution="normal",  # seed and distribution
-                                  partial=True).items():
+                                 ).items():
     print(f"    {kw}: {float(val):.6f}")
 
 # AP (TM), based on a trade matrix, with a zero diagonal and 20% of known values
@@ -153,6 +153,8 @@ for kw in keys:
 
 For comprehensive information on the estimator's capabilities, advanced configuration options, and implementation details, please refer to the [pyclsp module](https://pypi.org/project/pyclsp/ "Convex Least Squares Programming"), on which TMPinv is based.
 
+To ensure cross-platform reproducibility, all CLSP implementations use a modified condition number function based on singular values, with a relative cutoff equal to `cond_tolerance * the largest singular value`.
+
 **TMPinv Parameters:**
 
 `S` : *array_like* of shape *(m + p, m + p)*, optional<br>
@@ -222,6 +224,10 @@ If *True*, a convex programming problem is solved to refine `zhat`. The resultin
     If a scalar float is provided, that value is used after clipping to [0, 1].<br>
     If a list/iterable of floats is provided, each candidate is evaluated via a full solve, and the α with the smallest NRMSE is selected.<br>
     If None, α is chosen, based on an error rule: α = min(1.0, NRMSE_{α = 0} / (NRMSE_{α = 0} + NRMSE_{α = 1} + tolerance))
+
+`cond_tolerance` : *float* or *None*, default = *None*<br>
+    Singular-value cutoff for the custom condition number function.<br>
+    If *None*, the implementation uses an internal relative cutoff of `1e-14`.
 
 `*args`, `**kwargs` : optional<br>
 CVXPY arguments passed to the CVXPY solver.
